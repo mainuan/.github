@@ -269,7 +269,9 @@ jobs:
           set -euo pipefail
           apt-get install --yes --reinstall ./dist/"${PACKAGE}"_*.deb
           apt-get remove --yes "$PACKAGE"
-          apt-get purge --yes "$PACKAGE"
+          # A local package that was removed is no longer known to APT 3
+          # ("Unable to locate package"): purge its configuration with dpkg.
+          dpkg --purge "$PACKAGE"
           if dpkg -s "$PACKAGE" >/dev/null 2>&1; then
             echo "::error::$PACKAGE still known to dpkg after purge"; exit 1
           fi
