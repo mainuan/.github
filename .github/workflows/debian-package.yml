@@ -1,0 +1,320 @@
+# Reusable pipeline for Mainuan Debian packages.
+#
+#   build         -> checks, project tests, dpkg-buildpackage, lintian, SHA256SUMS
+#   install-test  -> install, smoke test, reinstall, remove and purge in a clean
+#                    Ubuntu 26.04 container
+#   release       -> only for a pushed tag v<version>; never replaces a release
+#
+# The calling repository keeps a debian/ directory (debian/changelog is the
+# single source of the version). See docs in this repository: README.md.
+name: Debian package (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: Main binary package name (as in debian/control)
+        type: string
+        required: true
+      source-dir:
+        description: Directory that contains debian/ (relative to the repository root)
+        type: string
+        default: .
+      test-command:
+        description: Project tests, run as an unprivileged user in source-dir after build-dep
+        type: string
+        default: ''
+      smoke-command:
+        description: Command run after installing the package in a clean container
+        type: string
+        default: ''
+      extra-install-packages:
+        description: Extra Ubuntu packages needed only by the smoke test
+        type: string
+        default: ''
+      release-title:
+        description: Human readable project name used in the release title
+        type: string
+        required: true
+      lintian-fail-on:
+        description: Lintian severity that fails the build
+        type: string
+        default: error
+    outputs:
+      version:
+        description: Package version from debian/changelog
+        value: ${{ jobs.build.outputs.version }}
+
+permissions:
+  contents: read
+
+# Container: official ubuntu:26.04 linux/amd64 manifest, pinned by digest
+# (the same digest audited for mainuan/welcome).
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    container:
+      image: ubuntu:26.04@sha256:42527649dbc4f9197a6073f426f488cbff0e9cc9f2afce32d91c383e4875634a
+      options: --platform linux/amd64
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+      DEB_BUILD_OPTIONS: parallel=2
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Bootstrap Ubuntu 26.04 (amd64 baseline, no architecture variants)
+        run: |
+          set -euo pipefail
+          cat > /etc/apt/apt.conf.d/99mainuan-baseline <<'APT'
+          #clear APT::Architecture-Variants;
+          APT::Architecture-Variants "";
+          APT::Architecture "amd64";
+          #clear APT::Architectures;
+          APT::Architectures { "amd64"; };
+          APT
+          apt-get update
+          apt-get install --yes --no-install-recommends \
+            build-essential dpkg-dev devscripts fakeroot lintian git ca-certificates python3
+          useradd --create-home --uid 1001 --shell /bin/bash builder
+
+      - name: Check out the triggering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install build dependencies from debian/control
+        working-directory: ${{ inputs.source-dir }}
+        run: |
+          set -euo pipefail
+          apt-get build-dep --yes --no-install-recommends ./
+          dpkg-checkbuilddeps
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          chown builder:builder "$(dirname "$GITHUB_WORKSPACE")"
+
+      - name: Validate version, tag and source tree
+        id: meta
+        working-directory: ${{ inputs.source-dir }}
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          version="$(dpkg-parsechangelog -S Version)"
+          source="$(dpkg-parsechangelog -S Source)"
+          upstream="${version#*:}"
+          case "$upstream" in *-*) upstream="${upstream%-*}" ;; esac
+          grep -qx "Package: $PACKAGE" debian/control || {
+            echo "::error::debian/control does not declare Package: $PACKAGE"; exit 1; }
+          if [ -n "$TAG" ]; then
+            expected="v${upstream//\~/-}"
+            if [ "$TAG" != "$expected" ]; then
+              echo "::error::tag $TAG does not match debian/changelog ($version, expected $expected)"
+              exit 1
+            fi
+            if [ "$(dpkg-parsechangelog -S Distribution)" = UNRELEASED ]; then
+              echo "::error::debian/changelog is UNRELEASED for a release tag"; exit 1
+            fi
+          fi
+          prerelease=false
+          case "$version" in *~*) prerelease=true ;; esac
+          {
+            echo "version=$version"
+            echo "upstream=$upstream"
+            echo "source=$source"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run project tests
+        if: inputs.test-command != ''
+        working-directory: ${{ inputs.source-dir }}
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: runuser -u builder -- bash -euo pipefail -c "$TEST_COMMAND"
+
+      - name: Build the Debian package
+        working-directory: ${{ inputs.source-dir }}
+        run: runuser -u builder -- dpkg-buildpackage -us -uc -b
+
+      - name: Inspect, lint and checksum
+        working-directory: ${{ inputs.source-dir }}
+        env:
+          PACKAGE: ${{ inputs.package }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          FAIL_ON: ${{ inputs.lintian-fail-on }}
+        run: |
+          set -euo pipefail
+          dist="$GITHUB_WORKSPACE/dist"
+          changelog="$PWD/debian/changelog"
+          mkdir -p "$dist"
+          shopt -s nullglob
+          debs=(../*.deb)
+          [ "${#debs[@]}" -gt 0 ] || { echo "::error::no .deb produced"; exit 1; }
+          cp -- "${debs[@]}" "$dist/"
+          cd "$dist"
+          main=( "${PACKAGE}_${VERSION#*:}_"*.deb )
+          [ "${#main[@]}" -eq 1 ] || { echo "::error::main package ${PACKAGE}_${VERSION} not found"; ls -l; exit 1; }
+          for deb in *.deb; do
+            echo "::group::$deb"
+            dpkg-deb --info "$deb"
+            dpkg-deb --contents "$deb"
+            echo "::endgroup::"
+            # An empty package (only DEBIAN/ and directories) is a build error.
+            files="$(dpkg-deb --fsys-tarfile "$deb" | tar -t | grep -vc '/$' || true)"
+            [ "$files" -gt 0 ] || { echo "::error::$deb installs no files"; exit 1; }
+          done
+          lintian --info --display-info --fail-on "$FAIL_ON" ./*.deb | tee lintian.log
+          version_upstream="${VERSION#*:}"
+          dpkg-parsechangelog -l "$changelog" -S Changes \
+            | sed '1,2d; s/^ \.$//; s/^ //' > changes.txt
+          {
+            echo "## ${{ inputs.release-title }} ${version_upstream}"
+            echo
+            echo "Pacote Debian para **Mainuan Linux** (Kubuntu 26.04 LTS, KDE Plasma 6.6, amd64)."
+            echo
+            echo "### Alterações"
+            echo
+            cat changes.txt
+            echo
+            echo "### Instalação"
+            echo
+            echo '```bash'
+            echo "sha256sum --check --ignore-missing SHA256SUMS"
+            echo "sudo apt install ./${main[0]}"
+            echo '```'
+            echo
+            echo "O GitHub Releases não é um repositório APT: atualizações chegam por novas versões do pacote ou pela ISO do Mainuan."
+            echo
+            echo "Compilado a partir do commit \`${GITHUB_SHA}\` pelo GitHub Actions; o pacote passou por lintian e por instalação, reinstalação e remoção num Ubuntu 26.04 limpo."
+          } > release-notes.md
+          rm -f changes.txt
+          sha256sum ./*.deb | sed 's| \./| |' > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deb-${{ inputs.package }}-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  install-test:
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    container:
+      image: ubuntu:26.04@sha256:42527649dbc4f9197a6073f426f488cbff0e9cc9f2afce32d91c383e4875634a
+      options: --platform linux/amd64
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deb-${{ inputs.package }}-${{ github.sha }}
+          path: dist
+
+      - name: Install in a clean Ubuntu 26.04
+        env:
+          PACKAGE: ${{ inputs.package }}
+          EXTRA: ${{ inputs.extra-install-packages }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check SHA256SUMS
+          apt-get update
+          # shellcheck disable=SC2086
+          [ -z "$EXTRA" ] || apt-get install --yes --no-install-recommends $EXTRA
+          apt-get install --yes ./"${PACKAGE}"_*.deb
+          dpkg -s "$PACKAGE" | grep -q '^Status: install ok installed'
+          dpkg -L "$PACKAGE" > ../installed-files.txt
+          # Every regular file listed by dpkg must exist on disk.
+          while IFS= read -r f; do
+            [ -d "$f" ] || [ -e "$f" ] || { echo "::error::missing installed file $f"; exit 1; }
+          done < ../installed-files.txt
+          apt-get check
+
+      - name: Smoke test
+        if: inputs.smoke-command != ''
+        env:
+          SMOKE_COMMAND: ${{ inputs.smoke-command }}
+        run: |
+          set -euo pipefail
+          useradd --create-home --shell /bin/bash smoke
+          runuser -u smoke -- bash -euo pipefail -c "$SMOKE_COMMAND"
+
+      - name: Reinstall, remove and purge
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          apt-get install --yes --reinstall ./dist/"${PACKAGE}"_*.deb
+          apt-get remove --yes "$PACKAGE"
+          apt-get purge --yes "$PACKAGE"
+          if dpkg -s "$PACKAGE" >/dev/null 2>&1; then
+            echo "::error::$PACKAGE still known to dpkg after purge"; exit 1
+          fi
+          leftovers=0
+          while IFS= read -r f; do
+            [ -d "$f" ] && continue
+            if [ -e "$f" ] || [ -L "$f" ]; then
+              # Files may legitimately belong to another installed package.
+              if ! dpkg -S "$f" >/dev/null 2>&1; then
+                echo "::warning::left behind after purge: $f"; leftovers=$((leftovers+1))
+              fi
+            fi
+          done < installed-files.txt
+          [ "$leftovers" -eq 0 ] || { echo "::error::$leftovers files left after purge"; exit 1; }
+
+  release:
+    needs: [build, install-test]
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository_owner == 'mainuan'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # No checkout and no repository code in the job that holds write access.
+      - name: Download package artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deb-${{ inputs.package }}-${{ github.sha }}
+          path: dist
+
+      - name: Publish the release (never replaces an existing one)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TITLE: ${{ inputs.release-title }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check SHA256SUMS
+          test "$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)" = "$SHA"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists; publish a new version instead of replacing files"
+            exit 1
+          fi
+          flags=()
+          case "$VERSION" in *~*) flags+=(--prerelease) ;; *) flags+=(--latest) ;; esac
+          gh release create "$TAG" ./*.deb SHA256SUMS \
+            --verify-tag --title "$TITLE ${VERSION#*:}" --notes-file release-notes.md "${flags[@]}"
