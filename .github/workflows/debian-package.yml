@@ -236,6 +236,9 @@ jobs:
           EXTRA: ${{ inputs.extra-install-packages }}
         run: |
           set -euo pipefail
+          # The ubuntu container image is minimized: dpkg drops translations,
+          # manual pages and docs. A Kubuntu desktop keeps them, so does the test.
+          rm -f /etc/dpkg/dpkg.cfg.d/excludes
           cd dist
           sha256sum --check SHA256SUMS
           apt-get update
