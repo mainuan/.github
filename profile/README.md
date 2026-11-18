@@ -67,11 +67,11 @@ Grave num pendrive com o KDE ISO Image Writer, o balenaEtcher ou o GNOME
 Disks. Experimente o sistema no modo Live e instale pelo ícone
 **Instalar o Sistema**.
 
-A versão atual é a **2027.1 RC1** (*release candidate*). Ela inicia por UEFI,
+A versão atual é a **2027.1 RC2** (*release candidate*). Ela inicia por UEFI,
 com ou sem Secure Boot, e por BIOS, e funciona em processadores sem AVX. Foi
-testada em máquinas virtuais com 4 vCPU e 6 GiB de RAM. Os testes em
-computadores reais ainda estão em andamento: veja os problemas conhecidos
-nas notas da release.
+testada em máquinas virtuais com 4 vCPU e 6 GiB de RAM e num computador antigo
+(Core 2 Duo, BIOS, 4 GB de RAM). Os testes em computadores modernos ainda
+estão em andamento: veja os problemas conhecidos nas notas da release.
 
 ## Projetos
 
