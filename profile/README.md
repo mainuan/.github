@@ -41,7 +41,7 @@ desenvolvido aqui no GitHub.
 | **Instalação simples** | Instaladores próprios para `.flatpakref`, AppImage e `.deb`, com verificação de origem e de integridade |
 | **Sistema sempre atualizado** | Alerta de atualizações APT e Flatpak ao entrar na sessão e canal oficial de novidades do Mainuan |
 | **Painel de Controle** | As configurações do Plasma organizadas num painel único, com atalho `Meta+I` |
-| **Editor do GRUB** | Entradas, tema, fontes e parâmetros de boot por interface gráfica |
+| **Identidade do início ao fim** | O mesmo logotipo, grafite e ciano no menu do GRUB, na tela de inicialização, no login e na abertura do Plasma |
 | **Escritório** | ONLYOFFICE, compatível com documentos corporativos |
 | **33 idiomas** | Os aplicativos Mainuan seguem o idioma do Plasma, inclusive árabe, hebraico, persa e urdu (da direita para a esquerda) |
 
@@ -49,6 +49,20 @@ desenvolvido aqui no GitHub.
 <img src="https://raw.githubusercontent.com/mainuan/.github/main/profile/assets/welcome-aparencia.png" width="440" alt="Mainuan Welcome: aparência, cor de destaque e layout">
 <img src="https://raw.githubusercontent.com/mainuan/.github/main/profile/assets/painel-de-controle.png" width="440" alt="Painel de Controle do Mainuan">
 </div>
+
+## Do ligar à área de trabalho
+
+<div align="center">
+<img src="https://raw.githubusercontent.com/mainuan/.github/main/profile/assets/boot-grub.png" width="440" alt="Menu do GRUB com o tema do Mainuan">
+<img src="https://raw.githubusercontent.com/mainuan/.github/main/profile/assets/boot-plymouth.png" width="440" alt="Tela de inicialização: logotipo do Mainuan com um anel que gira ao redor">
+<img src="https://raw.githubusercontent.com/mainuan/.github/main/profile/assets/boot-login.png" width="440" alt="Tela de login com o papel de parede e o logotipo do Mainuan">
+<img src="https://raw.githubusercontent.com/mainuan/.github/main/profile/assets/boot-splash.png" width="440" alt="Tela de apresentação do Plasma: o mesmo logotipo e anel, antes da área de trabalho">
+</div>
+
+O menu do GRUB, a tela de inicialização (Plymouth) e a tela de apresentação
+do Plasma usam a mesma arte, gerada a partir do logotipo oficial
+([dot-files](https://github.com/mainuan/dot-files)). Nenhuma tela espera
+mais que o necessário: as animações duram o tempo real do carregamento.
 
 ## Download
 
@@ -67,7 +81,7 @@ Grave num pendrive com o KDE ISO Image Writer, o balenaEtcher ou o GNOME
 Disks. Experimente o sistema no modo Live e instale pelo ícone
 **Instalar o Sistema**.
 
-A versão atual é a **2027.1 RC2** (*release candidate*). Ela inicia por UEFI,
+A versão atual é a **2027.1 RC3** (*release candidate*). Ela inicia por UEFI,
 com ou sem Secure Boot, e por BIOS, e funciona em processadores sem AVX. Foi
 testada em máquinas virtuais com 4 vCPU e 6 GiB de RAM e num computador antigo
 (Core 2 Duo, BIOS, 4 GB de RAM). Os testes em computadores modernos ainda
