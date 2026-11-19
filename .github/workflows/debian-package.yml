@@ -32,6 +32,13 @@ on:
         description: Extra Ubuntu packages needed only by the smoke test
         type: string
         default: ''
+      extra-debs:
+        description: >-
+          Mainuan .deb dependencies that are not in the Ubuntu archive, one
+          "<https URL> <sha256>" per line (pinned releases only); installed
+          together with the package in the clean container
+        type: string
+        default: ''
       release-title:
         description: Human readable project name used in the release title
         type: string
@@ -234,6 +241,7 @@ jobs:
         env:
           PACKAGE: ${{ inputs.package }}
           EXTRA: ${{ inputs.extra-install-packages }}
+          EXTRA_DEBS: ${{ inputs.extra-debs }}
         run: |
           set -euo pipefail
           # The ubuntu container image is minimized: dpkg drops translations,
@@ -244,7 +252,24 @@ jobs:
           apt-get update
           # shellcheck disable=SC2086
           [ -z "$EXTRA" ] || apt-get install --yes --no-install-recommends $EXTRA
-          apt-get install --yes ./"${PACKAGE}"_*.deb
+          # Pinned Mainuan dependencies (URL + SHA-256), outside dist/ so the
+          # package checks below only see the package under test.
+          extra_debs=()
+          mkdir -p ../extra-debs
+          if [ -n "${EXTRA_DEBS//[[:space:]]/}" ] && ! command -v curl > /dev/null; then
+            apt-get install --yes --no-install-recommends curl ca-certificates
+          fi
+          while read -r url sum; do
+            [ -n "$url" ] || continue
+            case "$url" in https://github.com/mainuan/*/releases/download/*.deb) ;;
+              *) echo "::error::extra-debs: only pinned Mainuan release .deb URLs: $url"; exit 1 ;; esac
+            [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::extra-debs: bad SHA-256 for $url"; exit 1; }
+            f="../extra-debs/$(basename "$url")"
+            curl --fail --location --silent --show-error --proto '=https' --output "$f" "$url"
+            echo "$sum  $f" | sha256sum --check --quiet
+            extra_debs+=("$f")
+          done <<< "$EXTRA_DEBS"
+          apt-get install --yes ./"${PACKAGE}"_*.deb "${extra_debs[@]}"
           dpkg -s "$PACKAGE" | grep -q '^Status: install ok installed'
           dpkg -L "$PACKAGE" > ../installed-files.txt
           # Every regular file listed by dpkg must exist on disk.

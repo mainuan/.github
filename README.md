@@ -52,3 +52,14 @@ Etapas:
    Versões com `~` viram *pre-release*.
 
 Pull requests e pushes na `main` só validam; nada é publicado.
+
+Dependências do Mainuan que não estão no arquivo da Ubuntu (por exemplo,
+`mainuan-identity` para o Welcome) entram no install-test por `extra-debs`,
+uma por linha, sempre fixadas por release e SHA-256:
+
+```yaml
+      extra-debs: |
+        https://github.com/mainuan/dot-files/releases/download/v2026.11.19/mainuan-identity_2026.11.19_all.deb 0b0b84a0…
+```
+
+Só URLs `https://github.com/mainuan/*/releases/download/*.deb` são aceitas.
