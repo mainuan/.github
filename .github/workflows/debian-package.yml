@@ -140,6 +140,20 @@ jobs:
           TEST_COMMAND: ${{ inputs.test-command }}
         run: runuser -u builder -- bash -euo pipefail -c "$TEST_COMMAND"
 
+      - name: Ensure maintainer scripts are executable
+        working-directory: ${{ inputs.source-dir }}
+        run: |
+          find debian -maxdepth 1 -type f \
+            \( -name '*.preinst' -o -name '*.postinst' \
+               -o -name '*.prerm' -o -name '*.postrm' \) \
+            -exec chmod 0755 {} +
+
+          echo "Maintainer scripts permissions:"
+          find debian -maxdepth 1 -type f \
+            \( -name '*.preinst' -o -name '*.postinst' \
+               -o -name '*.prerm' -o -name '*.postrm' \) \
+            -exec stat -c '%a %n' {} +
+
       - name: Build the Debian package
         working-directory: ${{ inputs.source-dir }}
         run: runuser -u builder -- dpkg-buildpackage -us -uc -b
