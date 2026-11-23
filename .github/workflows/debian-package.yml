@@ -303,7 +303,7 @@ jobs:
 
   release:
     needs: [build, install-test]
-    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository_owner == 'mainuan'
+    if: ((github.event_name == 'push' &&github.ref_type == 'tag') || (github.event_name == 'release' &&github.event.action == 'published')) && github.repository_owner == 'mainuan'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
