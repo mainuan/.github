@@ -3,7 +3,7 @@
 #   build         -> checks, project tests, dpkg-buildpackage, lintian, SHA256SUMS
 #   install-test  -> install, smoke test, reinstall, remove and purge in a clean
 #                    Ubuntu 26.04 container
-#   release       -> creates or updates a release for a pushed tag v<version>
+#   release       -> only for a pushed tag v<version>; never replaces a release
 #
 # The calling repository keeps a debian/ directory (debian/changelog is the
 # single source of the version). See docs in this repository: README.md.
@@ -113,9 +113,7 @@ jobs:
           upstream="${version#*:}"
           case "$upstream" in *-*) upstream="${upstream%-*}" ;; esac
           grep -qx "Package: $PACKAGE" debian/control || {
-            echo "::error::debian/control does not declare Package: $PACKAGE"
-            exit 1
-          }
+            echo "::error::debian/control does not declare Package: $PACKAGE"; exit 1; }
           if [ -n "$TAG" ]; then
             expected="v${upstream//\~/-}"
             if [ "$TAG" != "$expected" ]; then
@@ -123,8 +121,7 @@ jobs:
               exit 1
             fi
             if [ "$(dpkg-parsechangelog -S Distribution)" = UNRELEASED ]; then
-              echo "::error::debian/changelog is UNRELEASED for a release tag"
-              exit 1
+              echo "::error::debian/changelog is UNRELEASED for a release tag"; exit 1
             fi
           fi
           prerelease=false
@@ -174,18 +171,11 @@ jobs:
           mkdir -p "$dist"
           shopt -s nullglob
           debs=(../*.deb)
-          [ "${#debs[@]}" -gt 0 ] || {
-            echo "::error::no .deb produced"
-            exit 1
-          }
+          [ "${#debs[@]}" -gt 0 ] || { echo "::error::no .deb produced"; exit 1; }
           cp -- "${debs[@]}" "$dist/"
           cd "$dist"
           main=( "${PACKAGE}_${VERSION#*:}_"*.deb )
-          [ "${#main[@]}" -eq 1 ] || {
-            echo "::error::main package ${PACKAGE}_${VERSION} not found"
-            ls -l
-            exit 1
-          }
+          [ "${#main[@]}" -eq 1 ] || { echo "::error::main package ${PACKAGE}_${VERSION} not found"; ls -l; exit 1; }
           for deb in *.deb; do
             echo "::group::$deb"
             dpkg-deb --info "$deb"
@@ -193,10 +183,7 @@ jobs:
             echo "::endgroup::"
             # An empty package (only DEBIAN/ and directories) is a build error.
             files="$(dpkg-deb --fsys-tarfile "$deb" | tar -t | grep -vc '/$' || true)"
-            [ "$files" -gt 0 ] || {
-              echo "::error::$deb installs no files"
-              exit 1
-            }
+            [ "$files" -gt 0 ] || { echo "::error::$deb installs no files"; exit 1; }
           done
           lintian --info --display-info --fail-on "$FAIL_ON" ./*.deb | tee lintian.log
           version_upstream="${VERSION#*:}"
@@ -276,10 +263,7 @@ jobs:
           dpkg -L "$PACKAGE" > ../installed-files.txt
           # Every regular file listed by dpkg must exist on disk.
           while IFS= read -r f; do
-            [ -d "$f" ] || [ -e "$f" ] || {
-              echo "::error::missing installed file $f"
-              exit 1
-            }
+            [ -d "$f" ] || [ -e "$f" ] || { echo "::error::missing installed file $f"; exit 1; }
           done < ../installed-files.txt
           apt-get check
 
@@ -303,8 +287,7 @@ jobs:
           # ("Unable to locate package"): purge its configuration with dpkg.
           dpkg --purge "$PACKAGE"
           if dpkg -s "$PACKAGE" >/dev/null 2>&1; then
-            echo "::error::$PACKAGE still known to dpkg after purge"
-            exit 1
+            echo "::error::$PACKAGE still known to dpkg after purge"; exit 1
           fi
           leftovers=0
           while IFS= read -r f; do
@@ -312,19 +295,15 @@ jobs:
             if [ -e "$f" ] || [ -L "$f" ]; then
               # Files may legitimately belong to another installed package.
               if ! dpkg -S "$f" >/dev/null 2>&1; then
-                echo "::warning::left behind after purge: $f"
-                leftovers=$((leftovers+1))
+                echo "::warning::left behind after purge: $f"; leftovers=$((leftovers+1))
               fi
             fi
           done < installed-files.txt
-          [ "$leftovers" -eq 0 ] || {
-            echo "::error::$leftovers files left after purge"
-            exit 1
-          }
+          [ "$leftovers" -eq 0 ] || { echo "::error::$leftovers files left after purge"; exit 1; }
 
   release:
     needs: [build, install-test]
-    if: (github.event_name == 'push' || github.event_name == 'release') && github.ref_type == 'tag' && github.repository_owner == 'mainuan'
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository_owner == 'mainuan'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -337,7 +316,7 @@ jobs:
           name: deb-${{ inputs.package }}-${{ github.sha }}
           path: dist
 
-      - name: Publish or replace the release
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -348,48 +327,10 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-
-          # Validate the downloaded build artifacts and ensure the tag still
-          # points to the commit that triggered this workflow.
           sha256sum --check SHA256SUMS
           test "$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)" = "$SHA"
-
           flags=()
-          case "$VERSION" in
-            *~*) flags+=(--prerelease) ;;
-            *)   flags+=(--latest) ;;
-          esac
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Updating existing release $TAG"
-
-            # Upload current assets first. --clobber replaces assets with
-            # matching names without deleting the existing release.
-            gh release upload "$TAG" ./*.deb SHA256SUMS --clobber
-
-            # Remove assets from older builds that are no longer produced.
-            printf '%s\n' ./*.deb SHA256SUMS > expected-assets.txt
-            gh release view "$TAG" --json assets --jq '.assets[].name' \
-              > existing-assets.txt
-
-            while IFS= read -r asset; do
-              [ -n "$asset" ] || continue
-              if ! grep -Fxq -- "$asset" expected-assets.txt; then
-                echo "Removing obsolete release asset: $asset"
-                gh release delete-asset "$TAG" "$asset" --yes
-              fi
-            done < existing-assets.txt
-
-            gh release edit "$TAG" \
-              --title "$TITLE ${VERSION#*:}" \
-              --notes-file release-notes.md \
-              "${flags[@]}"
-          else
-            echo "Creating release $TAG"
-            gh release create "$TAG" ./*.deb SHA256SUMS \
-              --verify-tag \
-              --title "$TITLE ${VERSION#*:}" \
-              --notes-file release-notes.md \
-              "${flags[@]}"
-          fi
-
+          case "$VERSION" in *~*) flags+=(--prerelease) ;; *) flags+=(--latest) ;; esac
+          gh release delete "$TAG" --yes || true
+          gh release create "$TAG" ./*.deb SHA256SUMS \
+            --verify-tag --title "$TITLE ${VERSION#*:}" --notes-file release-notes.md "${flags[@]}"
