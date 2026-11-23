@@ -1,4 +1,3 @@
-```yaml
 # Reusable pipeline for Mainuan Debian packages.
 #
 #   build         -> checks, project tests, dpkg-buildpackage, lintian, SHA256SUMS
@@ -325,7 +324,7 @@ jobs:
 
   release:
     needs: [build, install-test]
-    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository_owner == 'mainuan'
+    if: (github.event_name == 'push' || github.event_name == 'release') && github.ref_type == 'tag' && github.repository_owner == 'mainuan'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -393,4 +392,4 @@ jobs:
               --notes-file release-notes.md \
               "${flags[@]}"
           fi
-```
+
